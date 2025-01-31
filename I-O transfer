@@ -1,0 +1,174 @@
+import time
+import openpyxl
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+import logging
+import tkinter as tk
+from tkinter import messagebox
+
+# Configure logging
+logging.basicConfig(filename='data_entry_log.txt', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Set up Chrome options
+options = Options()
+options.headless = False  # Ensure the browser is not headless
+
+# Add the detach option
+options.add_experimental_option("detach", True)
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+def navigate_to_digital_io():
+    """Navigates to the Digital I/O page in the application."""
+    driver.get("http://192.168.1.101/KAREL/COMMAIN")
+
+    # Get the initial frame (should be the default content)
+    current_frame = driver.execute_script("return window.frameElement && window.frameElement.id;")
+    logging.info(f"Initial frame: {current_frame}")
+
+    # Switch to the frmList frame to find navigation element
+    driver.switch_to.frame("frmList")
+
+    # Get the current frame after switching
+    current_frame = driver.execute_script("return window.frameElement && window.frameElement.id;")
+    logging.info(f"Current frame after switching: {current_frame}")
+
+    try:
+        digital_io_link = WebDriverWait(driver, 30).until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "body > ul > li:nth-child(6) > a"))
+        )
+        logging.info("Found Digital I/O link")
+
+        digital_io_link.click()
+
+    except TimeoutException:
+        logging.error("Timed out waiting for Digital I/O link")
+        # Handle the case where the link is not found
+
+    # Switch to the frmMain frame after the click
+    driver.switch_to.default_content()  # Switch back to the default content
+    driver.switch_to.frame("frmMain")  # Switch to frmMain frame
+
+navigate_to_digital_io()
+
+# Load the Excel file and get the active sheet
+workbook = openpyxl.load_workbook(r"C:\Users\psebstead\Documents\IOList.xlsx")
+sheet = workbook.active
+
+def show_confirmation_message():
+    """
+    Displays a confirmation message box with an "Exit" button.
+
+    Returns:
+        None
+    """
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+
+    response = messagebox.askyesno(
+        "Process Complete", 
+        "Please refresh the browser and verify that all data has been entered correctly.\n\nClick 'Yes' to exit."
+    )
+
+    if response:
+        driver.quit()
+        root.destroy()
+
+for row in range(1, sheet.max_row + 1):
+    try:
+        do_selector = sheet.cell(row, 1).value
+        do_value = sheet.cell(row, 2).value
+        di_selector = sheet.cell(row, 5).value
+        di_value = sheet.cell(row, 6).value
+
+        logging.info(f"do_selector: {do_selector}, do_value: {do_value}, di_selector: {di_selector}, di_value: {di_value}")
+
+        if do_value == "****Spare****" or di_value == "****Spare****":
+            continue
+
+        try:
+            di_number = int(di_selector.split("[")[1].split("]")[0])
+            logging.info(di_number)
+        except (IndexError, ValueError):
+            logging.error(f"Invalid DI selector format for row {row}: {di_selector}")
+            continue
+
+        try:
+            do_number = int(do_selector.split("[")[1].split("]")[0]) 
+            logging.info(do_number)
+        except (IndexError, ValueError):
+            logging.error(f"Invalid DO selector format for row {row}: {do_selector}")
+            continue
+
+        # Updated XPaths based on the provided table structure
+        di_comment_xpath = f"#formTable > table > tbody > tr:nth-child({di_number + 1}) > td:nth-child(2) > p > input[type=text]" 
+        do_comment_xpath = f"#formTable > table > tbody > tr:nth-child({do_number + 1}) > td:nth-child(4) > p > input[type=text]" 
+
+        # Get the current frame after switching
+        current_frame = driver.execute_script("return window.frameElement && window.frameElement.id;")
+        logging.info(f"Current frame after switching: {current_frame}") 
+
+        try:
+            di_comment_field = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, di_comment_xpath))
+            )
+
+            # Get the current value from the browser
+            current_di_value = di_comment_field.get_attribute("value") 
+
+            if current_di_value == di_value:
+                logging.info(f"DI comment for {di_selector} already matches. Skipping.")
+            else:
+                di_comment_field.clear()
+                WebDriverWait(driver, 2).until(  # Wait for the field to be empty
+                    EC.text_to_be_present_in_element_value((By.CSS_SELECTOR, di_comment_xpath), '')
+                )
+                di_comment_field.send_keys(di_value)
+                WebDriverWait(driver, 5).until(  # Wait for the entered value to appear
+                    EC.text_to_be_present_in_element_value((By.CSS_SELECTOR, di_comment_xpath), di_value)
+                )
+
+            do_comment_field = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, do_comment_xpath))
+            )
+
+            # Get the current value from the browser
+            current_do_value = do_comment_field.get_attribute("value") 
+
+            if current_do_value == do_value:
+                logging.info(f"DO comment for {di_selector} already matches. Skipping.")
+            else:
+                do_comment_field.clear()
+                WebDriverWait(driver, 2).until(  # Wait for the field to be empty
+                    EC.text_to_be_present_in_element_value((By.CSS_SELECTOR, do_comment_xpath), '')
+                )
+                do_comment_field.send_keys(do_value)
+                WebDriverWait(driver, 5).until(  # Wait for the entered value to appear
+                    EC.text_to_be_present_in_element_value((By.CSS_SELECTOR, do_comment_xpath), do_value)
+                )
+
+        except NoSuchElementException as e:
+            logging.error(f"Element not found for row {row}: {str(e)}")
+        except Exception as e:
+            logging.error(f"Error for row {row}: {str(e)}")
+
+    except Exception as e:
+        logging.error(f"Error processing row {row}: {str(e)}")
+
+# Navigate to the Digital I/O page after processing all rows
+navigate_to_digital_io()
+
+# Explicitly wait for page load after navigation
+WebDriverWait(driver, 20).until(
+    EC.element_to_be_clickable((By.CSS_SELECTOR, do_comment_xpath)) 
+) 
+
+# Display the confirmation message and handle the "Yes" response
+show_confirmation_message()
